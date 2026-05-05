@@ -50,6 +50,13 @@ EXTRA_LDFLAGS="-Wl,-z,max-page-size=16384 $DEP_LD_FLAGS"
   --disable-muxer=hls,dash,hds \
   --disable-encoders \
   --enable-encoder=aac \
+  --enable-encoder=gif \
+  --enable-muxer=gif \
+  --enable-filter=palettegen \
+  --enable-filter=paletteuse \
+  --enable-filter=split \
+  --enable-filter=fps \
+  --enable-filter=scale \
   --disable-outdevs \
   --disable-indevs \
   --target-os=android \

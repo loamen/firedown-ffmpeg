@@ -50,6 +50,13 @@ and re-application against future upstream merges.
 +  --disable-muxer=hls,dash,hds \
 +  --disable-encoders \
 +  --enable-encoder=aac \
++  --enable-encoder=gif \
++  --enable-muxer=gif \
++  --enable-filter=palettegen \
++  --enable-filter=paletteuse \
++  --enable-filter=split \
++  --enable-filter=fps \
++  --enable-filter=scale \
 +  --disable-outdevs \
 +  --disable-indevs \
    --target-os=android \
