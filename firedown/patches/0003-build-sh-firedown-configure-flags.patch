@@ -9,7 +9,9 @@ bitstream filters and filters Firedown actually touches at runtime.
 
 Library-level disables:
   - --disable-avdevice: Firedown never loads libavdevice
-  - --disable-postproc: legacy MPlayer-era postproc, unused
+    (libpostproc is already off by default in ffmpeg 8.x — only built
+    if --enable-postproc or --enable-gpl is passed, which Firedown
+    doesn't. There is no --disable-postproc option in 8.x.)
   - --disable-hwaccels: desktop hwaccels (CUDA/VAAPI/VDPAU/D3D11) don't
     apply on Android; MediaCodec would be opted into separately
   - --disable-vulkan, --disable-doc, --disable-ffmpeg, --disable-ffprobe
@@ -86,7 +88,6 @@ and re-application against future upstream merges.
 +  --disable-mbedtls \
 +  --enable-jni \
 +  --disable-avdevice \
-+  --disable-postproc \
 +  --disable-hwaccels \
 +  --disable-debug \
 +  --disable-runtime-cpudetect \

@@ -34,7 +34,8 @@ EXTRA_LDFLAGS="-Wl,-z,max-page-size=16384 -Wl,--gc-sections $DEP_LD_FLAGS"
 
 # === Firedown configuration ===
 # - --enable-jni: required by replacement libavformat/http.c (OkHttp bridge)
-# - --disable-avdevice / --disable-postproc: libraries Firedown never loads
+# - --disable-avdevice: Firedown never loads libavdevice (libpostproc is
+#     already off by default in ffmpeg 8.x unless --enable-gpl pulls it in)
 # - --disable-hwaccels: desktop hwaccels (CUDA/VAAPI/...) don't apply on Android
 # - --disable-debug / --disable-runtime-cpudetect: smaller per-ABI binaries
 # - --disable-protocol=... + --enable-protocol=http,https: OkHttp handles the rest via JNI
@@ -53,7 +54,6 @@ EXTRA_LDFLAGS="-Wl,-z,max-page-size=16384 -Wl,--gc-sections $DEP_LD_FLAGS"
   --disable-mbedtls \
   --enable-jni \
   --disable-avdevice \
-  --disable-postproc \
   --disable-hwaccels \
   --disable-debug \
   --disable-runtime-cpudetect \
