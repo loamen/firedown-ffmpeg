@@ -3,19 +3,56 @@ From: solarizeddev <solarizeddev@solarized.dev>
 Date: Thu, 1 Jan 1970 00:00:00 +0000
 Subject: [PATCH 3/3] scripts/ffmpeg/build.sh: Firedown configure flags
 
-Adds Firedown-specific configure flags to the FFmpeg build:
+Adds Firedown-specific configure flags to the FFmpeg build. The build is
+aggressively trimmed to ship only the codecs, containers, parsers,
+bitstream filters and filters Firedown actually touches at runtime.
 
+Library-level disables:
+  - --disable-avdevice: Firedown never loads libavdevice
+  - --disable-postproc: legacy MPlayer-era postproc, unused
+  - --disable-hwaccels: desktop hwaccels (CUDA/VAAPI/VDPAU/D3D11) don't
+    apply on Android; MediaCodec would be opted into separately
+  - --disable-vulkan, --disable-doc, --disable-ffmpeg, --disable-ffprobe
+
+Toolchain / linker:
+  - --disable-debug: skip -g; combined with strip, removes residual
+    debug sections
+  - --disable-runtime-cpudetect: we ship per-ABI, no need for runtime
+    dispatch tables
+  - extra-cflags: -O2 -ffunction-sections -fdata-sections (was -O3;
+    -O3 inlines/unrolls aggressively and bloats the .so files)
+  - extra-ldflags: -Wl,--gc-sections lets the linker drop unreferenced
+    functions/data per-symbol
+
+Network:
   - --enable-jni: required by replacement libavformat/http.c (OkHttp bridge)
   - --disable-protocol=...: trim unused/unwanted network protocols
-    (httpproxy, rtmp variants, rtsp, rtp, srtp, tls, ftp, gopher, ipfs/ipns
-    gateways, mmsh, mmst). Firedown's HTTP backend handles TLS via OkHttp.
+    (httpproxy, rtmp variants, rtsp, rtp, srtp, tls, ftp, gopher,
+    ipfs/ipns gateways, mmsh, mmst). Firedown's HTTP backend handles
+    TLS via OkHttp.
   - --enable-protocol=http,https: only protocols we keep
-  - --disable-muxer=hls,dash,hds: Firedown is a downloader, not a streamer
-  - --disable-encoders --enable-encoder=aac: only AAC encoder for audio
-    re-muxing
+
+Component allow-lists (disable-all then re-enable the names we need):
+  - encoders: aac (audio re-mux), gif (preview generation)
+  - decoders: h264,hevc,vp8,vp9,av1,mpeg4,mjpeg,aac,aac_latm,mp3,opus,
+    vorbis,flac,ac3,eac3,pcm_s16le,pcm_s16be,pcm_u8,gif,png
+    (stream copy doesn't need decoders; this set covers GIF generation
+    inputs)
+  - demuxers: mov,matroska,hls,dash,mpegts,flv,webm_dash_manifest,aac,
+    mp3,ogg,flac,wav,m4v,image2
+  - muxers: mp4,mov,ipod,matroska,webm,mpegts,adts,gif,mp3,ogg,flac,wav
+    (hls/dash/hds are NOT in the allow-list — Firedown downloads, it
+    doesn't stream)
+  - parsers: h264,hevc,aac,aac_latm,mpegaudio,opus,vorbis,vp8,vp9,av1,
+    flac,mjpeg,gif
+  - bsfs: aac_adtstoasc,h264_mp4toannexb,hevc_mp4toannexb,
+    extract_extradata,vp9_superframe (critical for HLS->MP4 remux)
+  - filters: palettegen,paletteuse,split,fps,scale (GIF preview chain)
+
+Devices / misc:
   - --disable-outdevs --disable-indevs: no input/output devices on Android
-  - --disable-ffprobe --disable-ffmpeg --disable-doc: skip CLI tools and
-    documentation; Firedown only consumes the libraries
+  - --disable-lzma --disable-iconv --disable-sndio --disable-libxcb
+    --disable-sdl2 --disable-xlib: drop dependencies not used on Android
 
 Preserves upstream's 16 KB page size flag for Android 15 compatibility.
 
@@ -23,35 +60,58 @@ This patch is already applied in this fork — kept here for documentation
 and re-application against future upstream merges.
 
 ---
- scripts/ffmpeg/build.sh | 20 ++++++++++++++++++++
- 1 file changed, 20 insertions(+)
+ scripts/ffmpeg/build.sh | 65 ++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 64 insertions(+), 1 deletion(-)
 
 --- a/scripts/ffmpeg/build.sh
 +++ b/scripts/ffmpeg/build.sh
-@@ -29,9 +29,26 @@
+@@ -27,11 +27,38 @@
+
+ # Android 15 with 16 kb page size support
  # https://developer.android.com/guide/practices/page-sizes#compile-r27
- EXTRA_LDFLAGS="-Wl,-z,max-page-size=16384 $DEP_LD_FLAGS"
- 
-+# === Firedown configuration ===
-+# - --enable-jni: required by replacement libavformat/http.c (OkHttp bridge)
-+# - --disable-protocol=...: trim unused/unwanted network protocols
-+# - --enable-protocol=http,https: only protocols we need (handled by OkHttp via JNI)
-+# - --disable-muxer=hls,dash,hds: Firedown is a downloader, doesn't write streams
-+# - --disable-encoders / --enable-encoder=aac: only AAC encoder for re-muxing
-+# - --disable-outdevs / --disable-indevs: no input/output devices on Android
-+# - --disable-ffprobe / --disable-ffmpeg / --disable-doc: skip CLI tools and docs
+-EXTRA_LDFLAGS="-Wl,-z,max-page-size=16384 $DEP_LD_FLAGS"
++# Adding -ffunction-sections / -fdata-sections + --gc-sections lets the linker
++# drop unreferenced functions/data per-symbol, dramatically shrinking the .so files.
++EXTRA_CFLAGS="-O2 -fPIC -ffunction-sections -fdata-sections $DEP_CFLAGS"
++EXTRA_LDFLAGS="-Wl,-z,max-page-size=16384 -Wl,--gc-sections $DEP_LD_FLAGS"
 +
++# === Firedown configuration ===
++# See firedown/patches/0003-build-sh-firedown-configure-flags.patch for rationale.
+
  ./configure \
    --prefix=${BUILD_DIR_FFMPEG}/${ANDROID_ABI} \
    --enable-cross-compile \
++  --disable-openssl \
++  --disable-gnutls \
++  --disable-mbedtls \
 +  --enable-jni \
-+  --disable-protocol=httpproxy,rtmp,rtmpe,rtmps,rtmpt,rtmpte,rtmpts,ffrtmp,ffrtmpcrypt,ffrtmphttp,rtsp,rtp,srtp,tls,ftp,ipns_gateway,gopher,ipfs_gateway,mmsh,mmst \
++  --disable-avdevice \
++  --disable-postproc \
++  --disable-hwaccels \
++  --disable-debug \
++  --disable-runtime-cpudetect \
++  --disable-lzma \
++  --disable-iconv \
++  --disable-sndio \
++  --disable-libxcb \
++  --disable-sdl2 \
++  --disable-xlib \
++  --disable-protocol=httpproxy,rtmp,rtmpe,rtmps,rtmpt,rtmpte,rtmpts,tls,ffrtmp,ffrtmpcrypt,ffrtmphttp,rtsp,rtp,srtp,ftp,ipns_gateway,gopher,ipfs_gateway,mmsh,mmst \
 +  --enable-protocol=http,https \
-+  --disable-muxer=hls,dash,hds \
 +  --disable-encoders \
 +  --enable-encoder=aac \
 +  --enable-encoder=gif \
-+  --enable-muxer=gif \
++  --disable-decoders \
++  --enable-decoder=h264,hevc,vp8,vp9,av1,mpeg4,mjpeg,aac,aac_latm,mp3,opus,vorbis,flac,ac3,eac3,pcm_s16le,pcm_s16be,pcm_u8,gif,png \
++  --disable-demuxers \
++  --enable-demuxer=mov,matroska,hls,dash,mpegts,flv,webm_dash_manifest,aac,mp3,ogg,flac,wav,m4v,image2 \
++  --disable-muxers \
++  --enable-muxer=mp4,mov,ipod,matroska,webm,mpegts,adts,gif,mp3,ogg,flac,wav \
++  --disable-parsers \
++  --enable-parser=h264,hevc,aac,aac_latm,mpegaudio,opus,vorbis,vp8,vp9,av1,flac,mjpeg,gif \
++  --disable-bsfs \
++  --enable-bsf=aac_adtstoasc,h264_mp4toannexb,hevc_mp4toannexb,extract_extradata,vp9_superframe \
++  --disable-filters \
 +  --enable-filter=palettegen \
 +  --enable-filter=paletteuse \
 +  --enable-filter=split \
@@ -62,7 +122,13 @@ and re-application against future upstream merges.
    --target-os=android \
    --arch=${TARGET_TRIPLE_MACHINE_ARCH} \
    --sysroot=${SYSROOT_PATH} \
-@@ -48,6 +65,9 @@
+@@ -45,9 +72,12 @@
+   --nm=${FAM_NM} \
+   --ranlib=${FAM_RANLIB} \
+   --strip=${FAM_STRIP} \
+-  --extra-cflags="-O3 -fPIC $DEP_CFLAGS" \
++  --extra-cflags="$EXTRA_CFLAGS" \
+   --extra-ldflags="$EXTRA_LDFLAGS" \
    --enable-shared \
    --disable-static \
    --disable-vulkan \
@@ -72,5 +138,5 @@ and re-application against future upstream merges.
    --pkg-config=${PKG_CONFIG_EXECUTABLE} \
    ${EXTRA_BUILD_CONFIGURATION_FLAGS} \
    $ADDITIONAL_COMPONENTS || exit 1
--- 
+--
 2.40.0
