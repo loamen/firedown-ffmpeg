@@ -27,14 +27,21 @@ DEP_LD_FLAGS="-L${BUILD_DIR_EXTERNAL}/${ANDROID_ABI}/lib $FFMPEG_EXTRA_LD_FLAGS"
 
 # Android 15 with 16 kb page size support
 # https://developer.android.com/guide/practices/page-sizes#compile-r27
-EXTRA_LDFLAGS="-Wl,-z,max-page-size=16384 $DEP_LD_FLAGS"
+# Adding -ffunction-sections / -fdata-sections + --gc-sections lets the linker
+# drop unreferenced functions/data per-symbol, dramatically shrinking the .so files.
+EXTRA_CFLAGS="-O2 -fPIC -ffunction-sections -fdata-sections $DEP_CFLAGS"
+EXTRA_LDFLAGS="-Wl,-z,max-page-size=16384 -Wl,--gc-sections $DEP_LD_FLAGS"
 
 # === Firedown configuration ===
 # - --enable-jni: required by replacement libavformat/http.c (OkHttp bridge)
-# - --disable-protocol=...: trim unused/unwanted network protocols
-# - --enable-protocol=http,https: only protocols we need (handled by OkHttp via JNI)
-# - --disable-muxer=hls,dash,hds: Firedown is a downloader, doesn't write streams
-# - --disable-encoders / --enable-encoder=aac: only AAC encoder for re-muxing
+# - --disable-avdevice / --disable-postproc: libraries Firedown never loads
+# - --disable-hwaccels: desktop hwaccels (CUDA/VAAPI/...) don't apply on Android
+# - --disable-debug / --disable-runtime-cpudetect: smaller per-ABI binaries
+# - --disable-protocol=... + --enable-protocol=http,https: OkHttp handles the rest via JNI
+# - --disable-{decoders,demuxers,muxers,parsers,bsfs,filters,encoders} + targeted re-enables:
+#     allow-list approach — only the codecs/containers/parsers/bitstream-filters/filters
+#     Firedown actually touches are compiled in. Add a name back here when you hit a
+#     stream that needs it.
 # - --disable-outdevs / --disable-indevs: no input/output devices on Android
 # - --disable-ffprobe / --disable-ffmpeg / --disable-doc: skip CLI tools and docs
 
@@ -45,13 +52,33 @@ EXTRA_LDFLAGS="-Wl,-z,max-page-size=16384 $DEP_LD_FLAGS"
   --disable-gnutls \
   --disable-mbedtls \
   --enable-jni \
+  --disable-avdevice \
+  --disable-postproc \
+  --disable-hwaccels \
+  --disable-debug \
+  --disable-runtime-cpudetect \
+  --disable-lzma \
+  --disable-iconv \
+  --disable-sndio \
+  --disable-libxcb \
+  --disable-sdl2 \
+  --disable-xlib \
   --disable-protocol=httpproxy,rtmp,rtmpe,rtmps,rtmpt,rtmpte,rtmpts,tls,ffrtmp,ffrtmpcrypt,ffrtmphttp,rtsp,rtp,srtp,ftp,ipns_gateway,gopher,ipfs_gateway,mmsh,mmst \
   --enable-protocol=http,https \
-  --disable-muxer=hls,dash,hds \
   --disable-encoders \
   --enable-encoder=aac \
   --enable-encoder=gif \
-  --enable-muxer=gif \
+  --disable-decoders \
+  --enable-decoder=h264,hevc,vp8,vp9,av1,mpeg4,mjpeg,aac,aac_latm,mp3,opus,vorbis,flac,ac3,eac3,pcm_s16le,pcm_s16be,pcm_u8,gif,png \
+  --disable-demuxers \
+  --enable-demuxer=mov,matroska,hls,dash,mpegts,flv,webm_dash_manifest,aac,mp3,ogg,flac,wav,m4v,image2 \
+  --disable-muxers \
+  --enable-muxer=mp4,mov,ipod,matroska,webm,mpegts,adts,gif,mp3,ogg,flac,wav \
+  --disable-parsers \
+  --enable-parser=h264,hevc,aac,aac_latm,mpegaudio,opus,vorbis,vp8,vp9,av1,flac,mjpeg,gif \
+  --disable-bsfs \
+  --enable-bsf=aac_adtstoasc,h264_mp4toannexb,hevc_mp4toannexb,extract_extradata,vp9_superframe \
+  --disable-filters \
   --enable-filter=palettegen \
   --enable-filter=paletteuse \
   --enable-filter=split \
@@ -70,7 +97,7 @@ EXTRA_LDFLAGS="-Wl,-z,max-page-size=16384 $DEP_LD_FLAGS"
   --nm=${FAM_NM} \
   --ranlib=${FAM_RANLIB} \
   --strip=${FAM_STRIP} \
-  --extra-cflags="-O3 -fPIC $DEP_CFLAGS" \
+  --extra-cflags="$EXTRA_CFLAGS" \
   --extra-ldflags="$EXTRA_LDFLAGS" \
   --enable-shared \
   --disable-static \
