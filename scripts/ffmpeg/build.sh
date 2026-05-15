@@ -34,7 +34,8 @@ EXTRA_LDFLAGS="-Wl,-z,max-page-size=16384 -Wl,--gc-sections $DEP_LD_FLAGS"
 
 # === Firedown configuration ===
 # - --enable-jni: required by replacement libavformat/http.c (OkHttp bridge)
-# - --disable-avdevice / --disable-postproc: libraries Firedown never loads
+# - --disable-avdevice: Firedown never loads libavdevice (libpostproc is
+#     already off by default in ffmpeg 8.x unless --enable-gpl pulls it in)
 # - --disable-hwaccels: desktop hwaccels (CUDA/VAAPI/...) don't apply on Android
 # - --disable-debug / --disable-runtime-cpudetect: smaller per-ABI binaries
 # - --disable-protocol=... + --enable-protocol=http,https: OkHttp handles the rest via JNI
@@ -53,7 +54,6 @@ EXTRA_LDFLAGS="-Wl,-z,max-page-size=16384 -Wl,--gc-sections $DEP_LD_FLAGS"
   --disable-mbedtls \
   --enable-jni \
   --disable-avdevice \
-  --disable-postproc \
   --disable-hwaccels \
   --disable-debug \
   --disable-runtime-cpudetect \
@@ -69,9 +69,9 @@ EXTRA_LDFLAGS="-Wl,-z,max-page-size=16384 -Wl,--gc-sections $DEP_LD_FLAGS"
   --enable-encoder=aac \
   --enable-encoder=gif \
   --disable-decoders \
-  --enable-decoder=h264,hevc,vp8,vp9,av1,mpeg4,mjpeg,aac,aac_latm,mp3,opus,vorbis,flac,ac3,eac3,pcm_s16le,pcm_s16be,pcm_u8,gif,png \
+  --enable-decoder=h264,hevc,vp8,vp9,av1,mpeg4,mjpeg,aac,aac_latm,mp3,opus,vorbis,flac,ac3,eac3,pcm_s16le,pcm_s16be,pcm_u8,gif,png,webp \
   --disable-demuxers \
-  --enable-demuxer=mov,matroska,hls,dash,mpegts,flv,webm_dash_manifest,aac,mp3,ogg,flac,wav,m4v,image2 \
+  --enable-demuxer=mov,matroska,hls,dash,mpegts,flv,webm_dash_manifest,aac,mp3,ogg,flac,wav,m4v,image2,webp_pipe \
   --disable-muxers \
   --enable-muxer=mp4,mov,ipod,matroska,webm,mpegts,adts,gif,mp3,ogg,flac,wav \
   --disable-parsers \
