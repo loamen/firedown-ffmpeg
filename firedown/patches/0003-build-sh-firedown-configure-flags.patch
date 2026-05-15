@@ -37,11 +37,12 @@ Network:
 Component allow-lists (disable-all then re-enable the names we need):
   - encoders: aac (audio re-mux), gif (preview generation)
   - decoders: h264,hevc,vp8,vp9,av1,mpeg4,mjpeg,aac,aac_latm,mp3,opus,
-    vorbis,flac,ac3,eac3,pcm_s16le,pcm_s16be,pcm_u8,gif,png
+    vorbis,flac,ac3,eac3,pcm_s16le,pcm_s16be,pcm_u8,gif,png,webp
     (stream copy doesn't need decoders; this set covers GIF generation
-    inputs)
+    inputs. `webp` is the in-tree native decoder — no external libwebp
+    dependency.)
   - demuxers: mov,matroska,hls,dash,mpegts,flv,webm_dash_manifest,aac,
-    mp3,ogg,flac,wav,m4v,image2
+    mp3,ogg,flac,wav,m4v,image2,webp_pipe
   - muxers: mp4,mov,ipod,matroska,webm,mpegts,adts,gif,mp3,ogg,flac,wav
     (hls/dash/hds are NOT in the allow-list — Firedown downloads, it
     doesn't stream)
@@ -103,9 +104,9 @@ and re-application against future upstream merges.
 +  --enable-encoder=aac \
 +  --enable-encoder=gif \
 +  --disable-decoders \
-+  --enable-decoder=h264,hevc,vp8,vp9,av1,mpeg4,mjpeg,aac,aac_latm,mp3,opus,vorbis,flac,ac3,eac3,pcm_s16le,pcm_s16be,pcm_u8,gif,png \
++  --enable-decoder=h264,hevc,vp8,vp9,av1,mpeg4,mjpeg,aac,aac_latm,mp3,opus,vorbis,flac,ac3,eac3,pcm_s16le,pcm_s16be,pcm_u8,gif,png,webp \
 +  --disable-demuxers \
-+  --enable-demuxer=mov,matroska,hls,dash,mpegts,flv,webm_dash_manifest,aac,mp3,ogg,flac,wav,m4v,image2 \
++  --enable-demuxer=mov,matroska,hls,dash,mpegts,flv,webm_dash_manifest,aac,mp3,ogg,flac,wav,m4v,image2,webp_pipe \
 +  --disable-muxers \
 +  --enable-muxer=mp4,mov,ipod,matroska,webm,mpegts,adts,gif,mp3,ogg,flac,wav \
 +  --disable-parsers \
