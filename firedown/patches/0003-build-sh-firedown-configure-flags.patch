@@ -37,12 +37,29 @@ Network:
 Component allow-lists (disable-all then re-enable the names we need):
   - encoders: aac (audio re-mux), gif (preview generation)
   - decoders: h264,hevc,vp8,vp9,av1,mpeg4,mjpeg,aac,aac_latm,mp3,opus,
-    vorbis,flac,ac3,eac3,pcm_s16le,pcm_s16be,pcm_u8,gif,png,webp
+    vorbis,flac,ac3,eac3,pcm_s16le,pcm_s16be,pcm_u8,gif,png,webp,bmp,
+    tiff,apng
     (stream copy doesn't need decoders; this set covers GIF generation
-    inputs. `webp` is the in-tree native decoder — no external libwebp
-    dependency.)
+    inputs and the web image formats Firedown might encounter:
+      - mjpeg: JPEG/JPG
+      - png + apng: PNG + animated PNG
+      - gif: GIF (animated)
+      - webp: native WebP (no external libwebp dependency)
+      - hevc: HEIC images (HEVC-encoded inside HEIF container)
+      - av1: AVIF images (AV1-encoded inside HEIF container)
+      - bmp: BMP files AND bitmaps embedded in ICO (favicons)
+      - tiff: TIFF (basic compression schemes — LZW/PackBits/uncompressed;
+              LZMA-compressed TIFF won't work since --disable-lzma is set)
+    JPEG XL and SVG are intentionally omitted — they require external
+    libjxl/librsvg respectively.)
   - demuxers: mov,matroska,hls,dash,mpegts,flv,webm_dash_manifest,aac,
-    mp3,ogg,flac,wav,m4v,image2,webp_pipe
+    mp3,ogg,flac,wav,m4v,image2,webp_pipe,heif,ico,apng,gif
+    (image2 is the file-based image demuxer covering JPEG/PNG/BMP/TIFF/
+    single-frame-GIF/WebP-as-file. webp_pipe handles raw/piped WebP.
+    heif handles HEIC/AVIF and properly parses tiled images and image
+    collections. ico handles favicon files. apng is the dedicated
+    animated PNG demuxer. gif is the dedicated animated-GIF demuxer —
+    image2 only returns a single still frame for GIF inputs.)
   - muxers: mp4,mov,ipod,matroska,webm,mpegts,adts,gif,mp3,ogg,flac,wav
     (hls/dash/hds are NOT in the allow-list — Firedown downloads, it
     doesn't stream)
@@ -50,7 +67,15 @@ Component allow-lists (disable-all then re-enable the names we need):
     flac,mjpeg,gif
   - bsfs: aac_adtstoasc,h264_mp4toannexb,hevc_mp4toannexb,
     extract_extradata,vp9_superframe (critical for HLS->MP4 remux)
-  - filters: palettegen,paletteuse,split,fps,scale (GIF preview chain)
+  - filters:
+      Video / GIF preview chain: palettegen,paletteuse,split,fps,scale
+      Audio re-encode / extract chain: aformat,asetnsamples,aresample,anull
+        (aformat + asetnsamples are required by the AAC encode path —
+         Firedown's encoder.c builds a filter graph like
+         `aformat=...,asetnsamples=n=1024:p=0` and configure_filtergraph
+         will fail with AVERROR_FILTER_NOT_FOUND if either is missing.
+         aresample handles sample-rate conversion; anull is a cheap
+         pass-through used when no transform is needed.)
 
 Devices / misc:
   - --disable-outdevs --disable-indevs: no input/output devices on Android
@@ -104,9 +129,9 @@ and re-application against future upstream merges.
 +  --enable-encoder=aac \
 +  --enable-encoder=gif \
 +  --disable-decoders \
-+  --enable-decoder=h264,hevc,vp8,vp9,av1,mpeg4,mjpeg,aac,aac_latm,mp3,opus,vorbis,flac,ac3,eac3,pcm_s16le,pcm_s16be,pcm_u8,gif,png,webp \
++  --enable-decoder=h264,hevc,vp8,vp9,av1,mpeg4,mjpeg,aac,aac_latm,mp3,opus,vorbis,flac,ac3,eac3,pcm_s16le,pcm_s16be,pcm_u8,gif,png,webp,bmp,tiff,apng \
 +  --disable-demuxers \
-+  --enable-demuxer=mov,matroska,hls,dash,mpegts,flv,webm_dash_manifest,aac,mp3,ogg,flac,wav,m4v,image2,webp_pipe \
++  --enable-demuxer=mov,matroska,hls,dash,mpegts,flv,webm_dash_manifest,aac,mp3,ogg,flac,wav,m4v,image2,webp_pipe,heif,ico,apng,gif \
 +  --disable-muxers \
 +  --enable-muxer=mp4,mov,ipod,matroska,webm,mpegts,adts,gif,mp3,ogg,flac,wav \
 +  --disable-parsers \
@@ -119,6 +144,10 @@ and re-application against future upstream merges.
 +  --enable-filter=split \
 +  --enable-filter=fps \
 +  --enable-filter=scale \
++  --enable-filter=aformat \
++  --enable-filter=asetnsamples \
++  --enable-filter=aresample \
++  --enable-filter=anull \
 +  --disable-outdevs \
 +  --disable-indevs \
    --target-os=android \
