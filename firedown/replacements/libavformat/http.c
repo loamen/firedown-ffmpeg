@@ -100,6 +100,16 @@ static jobject okhttp_get_options(OkhttpContext *c, JNIEnv *env, AVDictionary **
         jstring value = ff_jni_utf_chars_to_jstring(env, t->value, c);
         if(key && value) {
             jobject prev = (*env)->CallObjectMethod(env, meta_map, c->jfields.hash_map_put_method, key, value);
+            if (ff_jni_exception_check(env, 1, c) < 0) {
+                if (prev)
+                    (*env)->DeleteLocalRef(env, prev);
+                if (key)
+                    (*env)->DeleteLocalRef(env, key);
+                if (value)
+                    (*env)->DeleteLocalRef(env, value);
+                (*env)->DeleteLocalRef(env, meta_map);
+                return NULL;
+            }
             if (prev)
                 (*env)->DeleteLocalRef(env, prev);
         }
@@ -175,15 +185,24 @@ static int okhttp_open(URLContext *h, const char *uri, int flags, AVDictionary *
 
     object = (*env)->NewObject(env, c->jfields.okhttp_class, c->jfields.init_method, url, headers);
 
-    if (!object) {
+    if (ff_jni_exception_check(env, 1, h) < 0 || !object) {
         av_log(h, AV_LOG_ERROR, "okhttp_open: NewObject failed\n");
-        ret = AVERROR_EXTERNAL;
+        ret = AVERROR_EXIT;
         goto done;
     }
     c->thiz = (*env)->NewGlobalRef(env, object);
 
     meta_map = okhttp_get_options(c, env, options);
     ret = (*env)->CallIntMethod(env, c->thiz, c->jfields.okhttp_open_method, meta_map);
+
+    /* Java side may have thrown (e.g. InterruptedException when the worker
+     * thread is cancelled mid-open). Clear before any further JNI call so
+     * CheckJNI doesn't abort the process on the next callback. */
+    if (ff_jni_exception_check(env, 1, h) < 0) {
+        av_log(h, AV_LOG_ERROR, "okhttp_open: Java exception from okhttpOpen\n");
+        ret = AVERROR_EXIT;
+        goto done;
+    }
 
     if (ret < 0) {
         av_log(h, AV_LOG_WARNING, "okhttp_open: Java okhttpOpen returned %d\n", ret);
@@ -198,6 +217,12 @@ static int okhttp_open(URLContext *h, const char *uri, int flags, AVDictionary *
     }
 
     mime_type = (*env)->CallObjectMethod(env, c->thiz, c->jfields.okhttp_get_mime_method);
+
+    if (ff_jni_exception_check(env, 1, h) < 0) {
+        av_log(h, AV_LOG_ERROR, "okhttp_open: Java exception from okhttpGetMime\n");
+        ret = AVERROR_EXIT;
+        goto done;
+    }
 
     if (mime_type) {
         const char *m = (*env)->GetStringUTFChars(env, mime_type, NULL);
@@ -292,9 +317,12 @@ static int okhttp_read(URLContext *h, unsigned char *buf, int size)
     }
 #endif
 
+    /* On a pending exception (e.g. InterruptedException from Thread.interrupt
+     * during cancel), return AVERROR_EXIT rather than EIO so the demuxer
+     * unwinds cleanly instead of retrying into the same trap. */
     if (ff_jni_exception_check(env, 1, c->thiz) < 0) {
         av_log(h, AV_LOG_ERROR, "okhttp_read: Java exception\n");
-        return AVERROR(EIO);
+        return AVERROR_EXIT;
     }
 
     if (bytes_read > 0) {
@@ -327,7 +355,7 @@ static int64_t okhttp_seek(URLContext *h, int64_t off, int whence)
 
     if (ff_jni_exception_check(env, 1, c->thiz) < 0) {
         av_log(h, AV_LOG_ERROR, "okhttp_seek: Java exception\n");
-        return AVERROR(EINVAL);
+        return AVERROR_EXIT;
     }
 
     if (result == OKHTTP_AVERROR_EOF) {
