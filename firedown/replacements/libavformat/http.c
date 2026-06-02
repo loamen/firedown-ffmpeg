@@ -122,6 +122,10 @@ static jobject okhttp_get_options(OkhttpContext *c, JNIEnv *env, AVDictionary **
     return meta_map;
 }
 
+/* Forward declaration — okhttp_open() calls okhttp_seek(AVSEEK_SIZE) at end of
+ * open to learn the total size, and okhttp_seek is defined further down. */
+static int64_t okhttp_seek(URLContext *h, int64_t off, int whence);
+
 static int okhttp_close(URLContext *h)
 {
     OkhttpContext *c = h->priv_data;
