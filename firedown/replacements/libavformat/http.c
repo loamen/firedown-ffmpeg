@@ -122,10 +122,6 @@ static jobject okhttp_get_options(OkhttpContext *c, JNIEnv *env, AVDictionary **
     return meta_map;
 }
 
-/* Forward declaration — okhttp_open() calls okhttp_seek(AVSEEK_SIZE) at end of
- * open to learn the total size, and okhttp_seek is defined further down. */
-static int64_t okhttp_seek(URLContext *h, int64_t off, int whence);
-
 static int okhttp_close(URLContext *h)
 {
     OkhttpContext *c = h->priv_data;
@@ -162,6 +158,43 @@ static int okhttp_close(URLContext *h)
 
     av_log(h, AV_LOG_DEBUG, "okhttp_close finished\n");
     return 0;
+}
+
+static int64_t okhttp_seek(URLContext *h, int64_t off, int whence)
+{
+    OkhttpContext *c = h->priv_data;
+    JNIEnv *env = ff_jni_get_env(h);
+
+    av_log(h, AV_LOG_DEBUG, "okhttp_seek: off=%"PRId64" whence=%d\n", off, whence);
+
+    if (!env) {
+        av_log(h, AV_LOG_ERROR, "okhttp_seek: no JNIEnv\n");
+        return AVERROR(EINVAL);
+    }
+
+    int64_t result = (*env)->CallLongMethod(env, c->thiz, c->jfields.okhttp_seek_method, off, whence);
+
+    if (ff_jni_exception_check(env, 1, c->thiz) < 0) {
+        av_log(h, AV_LOG_ERROR, "okhttp_seek: Java exception\n");
+        return AVERROR_EXIT;
+    }
+
+    if (result == OKHTTP_AVERROR_EOF) {
+        av_log(h, AV_LOG_VERBOSE, "okhttp_seek: EOF\n");
+        return AVERROR_EOF;
+    } else if (result == OKHTTP_AVERROR_INTERRUPTED) {
+        av_log(h, AV_LOG_INFO, "okhttp_seek: interrupted\n");
+        return AVERROR_EXIT;
+    } else if (result == OKHTTP_AVERROR_ENOSYS) {
+        av_log(h, AV_LOG_VERBOSE, "okhttp_seek: ENOSYS\n");
+        return AVERROR(ENOSYS);
+    } else if (result == OKHTTP_AVERROR_EINVAL) {
+        av_log(h, AV_LOG_WARNING, "okhttp_seek: EINVAL\n");
+        return AVERROR(EINVAL);
+    }
+
+    av_log(h, AV_LOG_DEBUG, "okhttp_seek: result=%"PRId64"\n", result);
+    return result;
 }
 
 static int okhttp_open(URLContext *h, const char *uri, int flags, AVDictionary **options)
@@ -364,43 +397,6 @@ static int okhttp_read(URLContext *h, unsigned char *buf, int size)
     return AVERROR_EOF;
 }
 
-
-static int64_t okhttp_seek(URLContext *h, int64_t off, int whence)
-{
-    OkhttpContext *c = h->priv_data;
-    JNIEnv *env = ff_jni_get_env(h);
-
-    av_log(h, AV_LOG_DEBUG, "okhttp_seek: off=%"PRId64" whence=%d\n", off, whence);
-
-    if (!env) {
-        av_log(h, AV_LOG_ERROR, "okhttp_seek: no JNIEnv\n");
-        return AVERROR(EINVAL);
-    }
-
-    int64_t result = (*env)->CallLongMethod(env, c->thiz, c->jfields.okhttp_seek_method, off, whence);
-
-    if (ff_jni_exception_check(env, 1, c->thiz) < 0) {
-        av_log(h, AV_LOG_ERROR, "okhttp_seek: Java exception\n");
-        return AVERROR_EXIT;
-    }
-
-    if (result == OKHTTP_AVERROR_EOF) {
-        av_log(h, AV_LOG_VERBOSE, "okhttp_seek: EOF\n");
-        return AVERROR_EOF;
-    } else if (result == OKHTTP_AVERROR_INTERRUPTED) {
-        av_log(h, AV_LOG_INFO, "okhttp_seek: interrupted\n");
-        return AVERROR_EXIT;
-    } else if (result == OKHTTP_AVERROR_ENOSYS) {
-        av_log(h, AV_LOG_VERBOSE, "okhttp_seek: ENOSYS\n");
-        return AVERROR(ENOSYS);
-    } else if (result == OKHTTP_AVERROR_EINVAL) {
-        av_log(h, AV_LOG_WARNING, "okhttp_seek: EINVAL\n");
-        return AVERROR(EINVAL);
-    }
-
-    av_log(h, AV_LOG_DEBUG, "okhttp_seek: result=%"PRId64"\n", result);
-    return result;
-}
 
 #define HTTP_CLASS(flavor)                          \
 static const AVClass flavor ## _context_class = {   \
