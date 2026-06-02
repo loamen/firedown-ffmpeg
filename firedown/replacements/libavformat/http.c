@@ -25,6 +25,7 @@
 #define OKHTTP_AVERROR_TOO_MANY_REQUESTS -8
 #define OKHTTP_AVERROR_OTHER_4XX    -9
 #define OKHTTP_AVERROR_SERVER_ERROR -10
+#define OKHTTP_AVERROR_INTERRUPTED -11
 
 #define SEGMENT_SIZE 8192
 
@@ -211,6 +212,7 @@ static int okhttp_open(URLContext *h, const char *uri, int flags, AVDictionary *
             case OKHTTP_AVERROR_UNAUTHORIZED:  ret = AVERROR_HTTP_UNAUTHORIZED; break;
             case OKHTTP_AVERROR_FORBIDDEN:     ret = AVERROR_HTTP_FORBIDDEN; break;
             case OKHTTP_AVERROR_NOT_FOUND:     ret = AVERROR_HTTP_NOT_FOUND; break;
+            case OKHTTP_AVERROR_INTERRUPTED:   ret = AVERROR_EXIT; break;
             default:                           ret = AVERROR(EIO); break;
         }
         goto done;
@@ -333,6 +335,10 @@ static int okhttp_read(URLContext *h, unsigned char *buf, int size)
         av_log(h, AV_LOG_DEBUG, "okhttp_read: EAGAIN\n");
         return AVERROR(EAGAIN);
     }
+    if (bytes_read == OKHTTP_AVERROR_INTERRUPTED) {
+        av_log(h, AV_LOG_INFO, "okhttp_read: interrupted\n");
+        return AVERROR_EXIT;
+    }
 
     av_log(h, AV_LOG_VERBOSE, "okhttp_read: EOF\n");
     return AVERROR_EOF;
@@ -361,6 +367,9 @@ static int64_t okhttp_seek(URLContext *h, int64_t off, int whence)
     if (result == OKHTTP_AVERROR_EOF) {
         av_log(h, AV_LOG_VERBOSE, "okhttp_seek: EOF\n");
         return AVERROR_EOF;
+    } else if (result == OKHTTP_AVERROR_INTERRUPTED) {
+        av_log(h, AV_LOG_INFO, "okhttp_seek: interrupted\n");
+        return AVERROR_EXIT;
     } else if (result == OKHTTP_AVERROR_ENOSYS) {
         av_log(h, AV_LOG_VERBOSE, "okhttp_seek: ENOSYS\n");
         return AVERROR(ENOSYS);
