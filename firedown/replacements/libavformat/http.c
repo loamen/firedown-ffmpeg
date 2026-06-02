@@ -235,6 +235,22 @@ static int okhttp_open(URLContext *h, const char *uri, int flags, AVDictionary *
         }
     }
 
+    /* Advertise seekability honestly (native http.c does this; this port did
+     * not). The protocol always exposes url_seek, so without this the
+     * URLContext defaults to seekable even for a chunked segment whose total
+     * length we never learned. A "seekable but unknown-size" stream defeats the
+     * mov demuxer's read_header early-out ("stop after moov+first mdat" only
+     * fires for non-seekable input, or when an atom ends exactly at avio_size),
+     * so mov walks every moof/mdat to EOF and downloads the whole fragmented
+     * HLS track during avformat_open_input. okhttp_seek(AVSEEK_SIZE) returns the
+     * total size, or <0 when unknown. */
+    {
+        int64_t total = okhttp_seek(h, 0, AVSEEK_SIZE);
+        h->is_streamed = (total <= 0);
+        av_log(h, AV_LOG_VERBOSE, "okhttp_open: total=%"PRId64" is_streamed=%d\n",
+               total, h->is_streamed);
+    }
+
     av_log(h, AV_LOG_DEBUG, "okhttp_open: success\n");
 
 done:
