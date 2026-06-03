@@ -150,4 +150,31 @@ else
     echo "         Continuing without hls.c patch — connection keepalive still active." >&2
 fi
 
+# ----------------------------------------------------------------------
+# Step 3b: hls.c — cache and reuse single-use AES keys (Niconico domand)
+# ----------------------------------------------------------------------
+# Applied as a separate patch (its own FIREDOWN-HLS-KEYCACHE marker) so it is
+# idempotent independently of the keepalive patch above. Its hunks live well
+# away from the keepalive hunks (read_key + the include block, vs. open_url),
+# so applying after Step 3 just lands at an offset — patch handles that.
+
+KEYCACHE_PATCH="$FIREDOWN_DIR/patches/0004-hls-c-single-use-key-cache.patch"
+
+if grep -q "FIREDOWN-HLS-KEYCACHE" "$HLS_FILE"; then
+    echo "[firedown] hls.c key cache already applied, skipping"
+elif [[ -f "$KEYCACHE_PATCH" ]] && head -1 "$KEYCACHE_PATCH" | grep -q '^From '; then
+    echo "[firedown] Applying hls.c single-use key cache patch..."
+    if ! patch -p1 --forward --reject-file=- -d "$FFMPEG_DIR" < "$KEYCACHE_PATCH"; then
+        echo "ERROR: hls.c key cache patch failed to apply" >&2
+        echo "       FFmpeg source may have changed; regenerate the patch with:" >&2
+        echo "       ./firedown/scripts/generate-keycache-patch.sh $FFMPEG_DIR" >&2
+        exit 6
+    fi
+else
+    echo "WARNING: $KEYCACHE_PATCH is missing or a placeholder" >&2
+    echo "         Generate it with: ./firedown/scripts/generate-keycache-patch.sh $FFMPEG_DIR" >&2
+    echo "         Continuing without the key cache — single-use AES keys (Niconico" >&2
+    echo "         domand) will hang on the second open." >&2
+fi
+
 echo "[firedown] Done."
