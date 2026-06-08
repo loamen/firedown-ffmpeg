@@ -25,6 +25,7 @@ re-validated against the new source (the generators below diff against vanilla).
 | replacement | `replacements/libavcodec/webp.c`, `replacements/libavformat/webp_anim_dec.c` | Animated WebP decoder + demuxer (FFmpeg PR #22975). |
 | patch | `patches/0002-hls-c-remove-keepalive-branches.patch` | Removes hls.c `open_url_keepalive` paths (OkHttp pools at the transport layer). Generator: `scripts/generate-hls-patch.sh`. Marker: `FIREDOWN-HLS-PATCHED`. |
 | patch | `patches/0004-hls-c-single-use-key-cache.patch` | **Single-use AES-key cache** (see below). Generator: `scripts/generate-keycache-patch.sh`. Marker: `FIREDOWN-HLS-KEYCACHE`. |
+| patch | `patches/0005-hls-c-bail-on-consecutive-segment-failures.patch` | **Bail on an all-failing segment stream** (see below). Generator: `scripts/generate-segfail-patch.sh`. Marker: `FIREDOWN-HLS-SEGFAIL`. |
 | patch | `patches/0001-…`, `patches/0003-…` | ffmpeg-android-maker build hook + configure flags. |
 
 `apply-firedown-patches.sh` is **idempotent** — each edit is gated on a marker
@@ -84,6 +85,53 @@ CLAUDE.md "Niconico domand AES key" section for the full investigation,
 confounds already disproven (headers/cookies/Range/`is_streamed`), and the
 diagnostic discipline (clean test = fresh session, ffmpeg as the first key
 consumer).
+
+## hls.c bail-on-all-failing-segments (`patches/0005`)
+
+**Root cause it fixes ("endless probing on a dead live stream"):** ffmpeg's HLS
+reader (`read_data_continuous`) retries a segment `seg_max_retry` times (default
+0) then **skips** it (`cur_seq_no++`) and reloads the playlist. But the retry
+counter is **per-segment** (a local, reset on every skip), so there is **no
+bound across segments**. A playlist whose *every* segment fails to open just
+skips one, reloads, skips the next, reloads — forever. A **live** playlist has
+no `#EXT-X-ENDLIST` (no EOF to end it), and because the live edge keeps
+advancing the list is never "insufficient", so vanilla's `max_reload` /
+`m3u8_hold_counters` (which only catch a *stalled* list) never trip either.
+`avformat_find_stream_info` (the `metadatareader` capture probe) and the
+downloader both sit on this loop with no exit short of the `AVIOInterruptCB`,
+which only fires on a user cancel. The trigger seen in the wild: a YouTube
+**live** broadcast captured as HLS (live uses HLS, not SABR — see the app repo)
+whose `videoplayback` fragments all return **403** (a stale/untransformed n-param
+token); the manifest host serves the playlist fine, every `rr*.googlevideo.com`
+segment 403s, and the probe spins.
+
+**The fix:** count **consecutive whole-segment open failures** on the playlist
+(`firedown_seg_open_failures`), reset to 0 on any successful open, and once a run
+exceeds `FIREDOWN_HLS_MAX_CONSECUTIVE_SEG_FAILURES` (10) **propagate the open
+error** (`return ret`, e.g. `AVERROR_HTTP_FORBIDDEN`) instead of skipping +
+reloading. So an isolated bad fragment on an otherwise-good VOD is still skipped
+(the count resets the moment one segment opens), but a fully-broken stream fails
+fast — within ~10 fragments. On a live stream those skips are paced by the
+reload wait (~one target-duration each), so the bound is ~10×segment-duration of
+wall time; lower the constant if that feels long.
+
+**Design decisions to preserve:**
+- **It belongs in the demuxer, NOT the okhttp protocol** (`http.c` /
+  `FFmpegOkhttp`). Each fragment is a *separate* `URLContext` with a fresh
+  `FFmpegOkhttp` instance, so the protocol has no cross-fragment state to count
+  "all subsequent failed"; it already returns the 403 correctly. Only the
+  demuxer owns the skip/reload loop and the per-playlist state, and only it can
+  decide a *run* of failures means "give up". The protocol must keep mapping a
+  403 to `AVERROR_HTTP_FORBIDDEN` (skippable) — **not** `AVERROR_EXIT`, which is
+  reserved for cancel and would abort on a *single* bad VOD segment.
+- **A wall-clock timer was rejected.** A deadline on the interrupt callback would
+  also bound it, but it's blunt — it can't tell "broken" from "legitimately
+  slow", and would risk tripping a slow-but-working probe. Counting the actual
+  failure condition (a run of open failures) is precise and resets on progress.
+- **HLS only, for now.** This patches `read_data_continuous` (the audio/video
+  segment reader). The subtitle reader (`read_data_subtitle_segment`) and the
+  DASH demuxer (`dashdec.c`) have the same unbounded-skip shape; if a dead DASH
+  stream is ever observed to hang, mirror this counter there.
 
 ## Two different "walks to EOF" — don't conflate them
 

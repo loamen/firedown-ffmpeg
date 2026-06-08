@@ -1,0 +1,82 @@
+From 0000000000000000000000000000000000000005 Mon Sep 17 00:00:00 2001
+From: solarizeddev <info@solarized.dev>
+Date: Thu, 1 Jan 1970 00:00:00 +0000
+Subject: [PATCH 5/5] hls: bail out after consecutive segment open failures
+
+read_data_continuous retries a segment seg_max_retry times then skips it,
+but the retry counter is per-segment, so a playlist whose every segment
+fails to open (e.g. a live broadcast whose fragments all return 403) skips
++ reloads forever: a live playlist has no EXT-X-ENDLIST so there is no EOF,
+and the advancing live edge keeps the list 'sufficient' so max_reload /
+m3u8_hold_counters never trip. find_stream_info (the capture probe) and the
+downloader both spin on this with no exit short of the AVIO interrupt
+callback (user-cancel only).
+
+Count consecutive whole-segment open failures on the playlist, reset on any
+successful open, and once a run exceeds a small bound propagate the open
+error instead of skipping. Rides out transient fragment errors on a good
+VOD; fails fast on a fully-broken stream. Marker: FIREDOWN-HLS-SEGFAIL.
+---
+ libavformat/hls.c | varies
+
+--- a/libavformat/hls.c
++++ b/libavformat/hls.c
+@@ -130,6 +130,12 @@
+     int broken;
+     int64_t cur_seq_no;
+     int64_t last_seq_no;
++    /* FIREDOWN-HLS-SEGFAIL: number of consecutive whole segments that
++     * failed to open (each after its seg_max_retry retries). Reset to 0 on
++     * any successful segment open. When a run exceeds
++     * FIREDOWN_HLS_MAX_CONSECUTIVE_SEG_FAILURES, read_data_continuous
++     * propagates the open error instead of skipping + reloading forever. */
++    int firedown_seg_open_failures;
+     int m3u8_hold_counters;
+     int64_t cur_seg_offset;
+     int64_t last_load_time;
+@@ -1638,6 +1644,18 @@
+     return ret;
+ }
+ 
++/* FIREDOWN-HLS-SEGFAIL: give up on a playlist whose segments keep failing
++ * to open. Vanilla retries each segment seg_max_retry times then skips it,
++ * but that counter is per-segment, so a stream where EVERY segment fails
++ * (e.g. a live playlist whose fragments all return 403) skips forever and
++ * never ends find_stream_info / the read loop. We count consecutive
++ * whole-segment open failures and, past this bound, propagate the open
++ * error so the demuxer fails fast instead of probing the entire (endless)
++ * manifest. Small enough to kill a fully-broken stream in a few segments,
++ * large enough to ride out a handful of genuinely-transient fragment
++ * errors on an otherwise-good VOD (the count resets on any open success). */
++#define FIREDOWN_HLS_MAX_CONSECUTIVE_SEG_FAILURES 10
++
+ static int read_data_continuous(void *opaque, uint8_t *buf, int buf_size)
+ {
+     struct playlist *v = opaque;
+@@ -1688,12 +1706,26 @@
+                        v->index);
+                 v->cur_seq_no++;
+                 segment_retries = 0;
++                /* FIREDOWN-HLS-SEGFAIL: a definitively-failed (skipped)
++                 * segment. Count consecutive failures across segments; once
++                 * a run exceeds the bound the whole playlist is treated as
++                 * unreadable and the open error (e.g. AVERROR_HTTP_FORBIDDEN)
++                 * is propagated, so a stream whose every fragment fails
++                 * cannot skip + reload forever. Reset on a successful open. */
++                v->firedown_seg_open_failures++;
++                if (v->firedown_seg_open_failures > FIREDOWN_HLS_MAX_CONSECUTIVE_SEG_FAILURES) {
++                    av_log(v->parent, AV_LOG_ERROR,
++                           "Playlist %d: %d consecutive segments failed to open, giving up\n",
++                           v->index, v->firedown_seg_open_failures);
++                    return ret;
++                }
+             } else {
+                 segment_retries++;
+             }
+             goto restart;
+         }
+         segment_retries = 0;
++        v->firedown_seg_open_failures = 0; /* FIREDOWN-HLS-SEGFAIL: reset run on a successful open */
+         just_opened = 1;
+     }
+ 

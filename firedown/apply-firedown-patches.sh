@@ -177,4 +177,30 @@ else
     echo "         domand) will hang on the second open." >&2
 fi
 
+# Step 3c: hls.c — bail out after consecutive segment open failures
+# ----------------------------------------------------------------------
+# Separate patch (its own FIREDOWN-HLS-SEGFAIL marker) so it is idempotent
+# independently of the patches above. Its hunks (struct playlist field +
+# read_data_continuous) are distinct from the keepalive (open_url) and key
+# cache (read_key) hunks, so applying after Steps 3/3b just lands at an offset.
+
+SEGFAIL_PATCH="$FIREDOWN_DIR/patches/0005-hls-c-bail-on-consecutive-segment-failures.patch"
+
+if grep -q "FIREDOWN-HLS-SEGFAIL" "$HLS_FILE"; then
+    echo "[firedown] hls.c segment-failure bail already applied, skipping"
+elif [[ -f "$SEGFAIL_PATCH" ]] && head -1 "$SEGFAIL_PATCH" | grep -q '^From '; then
+    echo "[firedown] Applying hls.c consecutive-segment-failure bail patch..."
+    if ! patch -p1 --forward --reject-file=- -d "$FFMPEG_DIR" < "$SEGFAIL_PATCH"; then
+        echo "ERROR: hls.c segment-failure patch failed to apply" >&2
+        echo "       FFmpeg source may have changed; regenerate the patch with:" >&2
+        echo "       ./firedown/scripts/generate-segfail-patch.sh $FFMPEG_DIR" >&2
+        exit 7
+    fi
+else
+    echo "WARNING: $SEGFAIL_PATCH is missing or a placeholder" >&2
+    echo "         Generate it with: ./firedown/scripts/generate-segfail-patch.sh $FFMPEG_DIR" >&2
+    echo "         Continuing without it — a stream whose every segment fails (e.g." >&2
+    echo "         a live HLS whose fragments all 403) will probe/download forever." >&2
+fi
+
 echo "[firedown] Done."
