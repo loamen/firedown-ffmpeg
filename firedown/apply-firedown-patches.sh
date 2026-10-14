@@ -44,6 +44,12 @@ if [[ -d "$REPLACEMENTS_DIR" ]]; then
         echo "  - libavformat/http.c (OkHttp JNI backend)"
         cp "$REPLACEMENTS_DIR/libavformat/http.c" "$FFMPEG_DIR/libavformat/http.c"
     fi
+
+    # New files, not replacements: the DASH demuxer's XML tree, parsed in
+    # Java (FFmpegXml) instead of libxml2. Wired in by Step 3e.
+    echo "  - libavformat/fdxml.{c,h} (DASH manifest XML via JNI)"
+    cp "$REPLACEMENTS_DIR/libavformat/fdxml.c" "$FFMPEG_DIR/libavformat/fdxml.c"
+    cp "$REPLACEMENTS_DIR/libavformat/fdxml.h" "$FFMPEG_DIR/libavformat/fdxml.h"
 fi
 
 # ----------------------------------------------------------------------
@@ -243,6 +249,89 @@ fi
 if grep -q 'xmlCleanupParser();' "$DASH_FILE"; then
     echo "ERROR: dashdec.c still calls xmlCleanupParser() after patching" >&2
     exit 9
+fi
+
+# ----------------------------------------------------------------------
+# Step 3e: dashdec.c — parse manifests in Java (FFmpegXml), not libxml2
+# ----------------------------------------------------------------------
+# dashdec.c keeps calling libxml2's names; fdxml.h maps them onto a tree that
+# libavformat/fdxml.c rebuilds from ONE JNI call per manifest. So dashdec.c
+# itself changes in two lines (the include and the parse call), and the
+# DASH demuxer depends on JNI instead of libxml2 — build WITHOUT -xml2.
+#
+# The guard at the end is the part to keep: fdxml.h implements only the
+# libxml2 calls dashdec.c makes today. An FFmpeg bump that adds one must fail
+# here, not compile against a missing macro or link against a stray libxml2.
+
+FDXML_HEADER="$FFMPEG_DIR/libavformat/fdxml.h"
+
+python3 - "$DASH_FILE" "$FFMPEG_DIR/configure" "$FFMPEG_DIR/libavformat/Makefile" "$FDXML_HEADER" <<'PYEOF'
+import re
+import sys
+
+dash_path, configure_path, makefile_path, header_path = sys.argv[1:]
+
+
+def edit(path, old, new, marker, what):
+    with open(path) as f:
+        text = f.read()
+    if marker in text:
+        return
+    if old not in text:
+        print('ERROR: anchor for %s not found in %s: %s' % (what, path, old), file=sys.stderr)
+        print('       Upstream FFmpeg may have changed; update this script.', file=sys.stderr)
+        sys.exit(10)
+    with open(path, 'w') as f:
+        f.write(text.replace(old, new, 1))
+    print('[firedown] ' + what)
+
+
+edit(dash_path,
+     '#include <libxml/parser.h>',
+     '#include "fdxml.h" /* FIREDOWN-DASH-FDXML: XML tree from FFmpegXml (JNI) */',
+     'FIREDOWN-DASH-FDXML', 'dashdec.c: include fdxml.h')
+edit(dash_path,
+     'doc = xmlReadMemory(buf.str, buf.len, c->base_url, NULL, 0);',
+     'doc = ff_fdxml_read_memory(s, buf.str, buf.len);',
+     'ff_fdxml_read_memory(', 'dashdec.c: parse through ff_fdxml_read_memory')
+edit(configure_path,
+     'dash_demuxer_deps="libxml2"',
+     'dash_demuxer_deps="jni"',
+     'dash_demuxer_deps="jni"', 'configure: dash demuxer depends on jni')
+edit(makefile_path,
+     'OBJS-$(CONFIG_DASH_DEMUXER)              += dash.o dashdec.o\n',
+     'OBJS-$(CONFIG_DASH_DEMUXER)              += dash.o dashdec.o fdxml.o\n',
+     'dashdec.o fdxml.o', 'Makefile: build fdxml.o with the dash demuxer')
+
+with open(dash_path) as f:
+    dash = f.read()
+with open(header_path) as f:
+    header = f.read()
+if 'libxml/' in dash:
+    print('ERROR: dashdec.c still includes a libxml2 header', file=sys.stderr)
+    sys.exit(10)
+provided = set(re.findall(r'^#define\s+(xml\w+|LIBXML_\w+)', header, re.M))
+provided |= set(re.findall(r'\b(xml[A-Z]\w*|XML_[A-Z_]+)\b', header))
+# Code only: comments (patch 0006's among them) may name libxml2 freely.
+code = re.sub(r'/\*.*?\*/', ' ', dash, flags=re.S)
+code = re.sub(r'//[^\n]*', ' ', code)
+used = set(re.findall(r'\b(xml[A-Z]\w*|XML_[A-Z_]+|LIBXML_\w+)\b', code))
+missing = sorted(used - provided)
+if missing:
+    print('ERROR: dashdec.c uses libxml2 names fdxml.h does not provide: ' + ', '.join(missing), file=sys.stderr)
+    print('       Implement them in firedown/replacements/libavformat/fdxml.{c,h}', file=sys.stderr)
+    print('       with libxml2 2.13 semantics, and diff dashdec parse results against', file=sys.stderr)
+    print('       a libxml2 build before shipping.', file=sys.stderr)
+    sys.exit(10)
+PYEOF
+
+if ! grep -q 'FIREDOWN-DASH-FDXML' "$DASH_FILE" || ! grep -q 'ff_fdxml_read_memory(' "$DASH_FILE"; then
+    echo "ERROR: dashdec.c fdxml edit verification failed" >&2
+    exit 10
+fi
+if ! grep -q '^dash_demuxer_deps="jni"$' "$FFMPEG_DIR/configure"; then
+    echo "ERROR: configure dash_demuxer_deps edit verification failed" >&2
+    exit 10
 fi
 
 echo "[firedown] Done."
