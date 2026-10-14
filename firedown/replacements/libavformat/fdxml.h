@@ -23,6 +23,9 @@
  *  - xmlNodeSetContent stores what xmlEncodeSpecialChars returned. libxml2
  *    escapes, then decodes entity references on set; here BOTH are identity,
  *    which yields the same stored text. They are a pair: keep them in step.
+ *
+ * Every one of these is pinned by scripts/dashxml-harness/run.sh, which diffs
+ * dashdec.c's parse results against a libxml2 build. Run it after any change.
  */
 
 #ifndef AVFORMAT_FDXML_H

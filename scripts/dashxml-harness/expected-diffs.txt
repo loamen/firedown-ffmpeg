@@ -1,0 +1,5 @@
+# Manifests on which the fdxml build is EXPECTED to differ from libxml2, one
+# per line: <file name> <reason>. run.sh requires each of these to differ AND
+# the fdxml build to refuse it (ret < 0); every other manifest must be
+# identical. Keep this list short: each line is a deliberate behaviour change.
+doctype.mpd  FFmpegXml refuses a DOCTYPE (entity-expansion door; no MPD carries one). libxml2 parses it.

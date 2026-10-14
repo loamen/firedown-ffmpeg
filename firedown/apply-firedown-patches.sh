@@ -320,8 +320,7 @@ missing = sorted(used - provided)
 if missing:
     print('ERROR: dashdec.c uses libxml2 names fdxml.h does not provide: ' + ', '.join(missing), file=sys.stderr)
     print('       Implement them in firedown/replacements/libavformat/fdxml.{c,h}', file=sys.stderr)
-    print('       with libxml2 2.13 semantics, and diff dashdec parse results against', file=sys.stderr)
-    print('       a libxml2 build before shipping.', file=sys.stderr)
+    print('       with libxml2 2.13 semantics, then run scripts/dashxml-harness/run.sh.', file=sys.stderr)
     sys.exit(10)
 PYEOF
 

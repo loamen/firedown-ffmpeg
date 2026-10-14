@@ -10,9 +10,12 @@ firedown/
 │                                # Applies replacements + patches to the FFmpeg
 │                                # source tree before configure runs.
 │
-├── replacements/                # Files that replace vanilla FFmpeg sources
+├── replacements/                # Files copied into the FFmpeg source tree
 │   └── libavformat/
-│       └── http.c               # OkHttp JNI backend (replaces FFmpeg's HTTP)
+│       ├── http.c               # OkHttp JNI backend (replaces FFmpeg's HTTP)
+│       └── fdxml.c, fdxml.h     # NEW files: the DASH demuxer's XML tree, parsed
+│                                # in Java (FFmpegXml) through JNI — replaces
+│                                # libxml2 (wired in by Step 3e of the apply script)
 │
 ├── patches/                     # Documentation patches — already applied in this fork.
 │   │                            # Kept for reference and re-application against
@@ -40,7 +43,8 @@ firedown/
 │   └── 0006-dashdec-c-drop-xmlCleanupParser.patch
 │                                # libavformat/dashdec.c — drop the per-parse
 │                                # xmlCleanupParser() that destroyed libxml2's
-│                                # global mutexes under concurrent use (build-time)
+│                                # global mutexes under concurrent use (build-time;
+│                                # moot since fdxml, kept as harmless)
 │
 └── scripts/
     ├── install-firedown-hook.sh # One-time: re-applies the modification to
@@ -82,9 +86,12 @@ These modify files inside the FFmpeg source tree, which is downloaded fresh each
 | `libavformat/hls.c` | Remove `open_url_keepalive` code paths | `firedown/patches/0002-...patch` is applied at build time |
 | `libavformat/hls.c` | Single-use AES-key cache; bail on an all-failing segment stream | `firedown/patches/0004-...patch` and `0005-...patch`, applied at build time |
 | `libavformat/dashdec.c` | Drop the per-parse `xmlCleanupParser()` (destroys libxml2's global mutexes; crashed concurrent DASH probes) | `firedown/patches/0006-...patch` is applied at build time |
+| `libavformat/dashdec.c` + `fdxml.{c,h}` | Parse DASH manifests through the app's `FFmpegXml` (JNI) instead of libxml2: two lines in `dashdec.c` (include + parse call), the shim copied in, and a build failure if `dashdec.c` uses a libxml2 name the shim lacks | Step 3e of `apply-firedown-patches.sh`; verified by `scripts/dashxml-harness/run.sh` |
+| `libavformat/Makefile` | Build `fdxml.o` with the dash demuxer | Step 3e |
 | `configure` | Add `http_protocol_deps="jni"` and `https_protocol_deps="jni"` | `apply-firedown-patches.sh` uses `awk` to insert the declarations |
+| `configure` | `dash_demuxer_deps="libxml2"` → `"jni"` (build without `-xml2`) | Step 3e |
 
-`apply-firedown-patches.sh` is invoked by the modified `ffmpeg-android-maker.sh` after FFmpeg source is downloaded but before any per-ABI build runs. It performs all three operations idempotently.
+`apply-firedown-patches.sh` is invoked by the modified `ffmpeg-android-maker.sh` after FFmpeg source is downloaded but before any per-ABI build runs. Every step is idempotent.
 
 ## Initial setup
 

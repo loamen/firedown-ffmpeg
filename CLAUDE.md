@@ -26,7 +26,8 @@ re-validated against the new source (the generators below diff against vanilla).
 | patch | `patches/0002-hls-c-remove-keepalive-branches.patch` | Removes hls.c `open_url_keepalive` paths (OkHttp pools at the transport layer). Generator: `scripts/generate-hls-patch.sh`. Marker: `FIREDOWN-HLS-PATCHED`. |
 | patch | `patches/0004-hls-c-single-use-key-cache.patch` | **Single-use AES-key cache** (see below). Generator: `scripts/generate-keycache-patch.sh`. Marker: `FIREDOWN-HLS-KEYCACHE`. |
 | patch | `patches/0005-hls-c-bail-on-consecutive-segment-failures.patch` | **Bail on an all-failing segment stream** (see below). Generator: `scripts/generate-segfail-patch.sh`. Marker: `FIREDOWN-HLS-SEGFAIL`. |
-| patch | `patches/0006-dashdec-c-drop-xmlCleanupParser.patch` | **Drop `xmlCleanupParser()` after each DASH manifest parse** (see below). Generator: `scripts/generate-xmlcleanup-patch.sh`. Marker: `FIREDOWN-DASH-XMLCLEANUP`. |
+| patch | `patches/0006-dashdec-c-drop-xmlCleanupParser.patch` | **Drop `xmlCleanupParser()` after each DASH manifest parse** (see below). Generator: `scripts/generate-xmlcleanup-patch.sh`. Marker: `FIREDOWN-DASH-XMLCLEANUP`. Moot since fdxml; kept, harmless. |
+| new files + edit | `replacements/libavformat/fdxml.{c,h}` + Step 3e of `apply-firedown-patches.sh` | **DASH manifests parsed in Java, no libxml2** (see below). libxml2's tree API under libxml2's names, backed by ONE JNI call per manifest into the app's `FFmpegXml`. Step 3e: the two-line `dashdec.c` edit (marker `FIREDOWN-DASH-FDXML`), `dash_demuxer_deps="jni"`, `fdxml.o` in the Makefile, and a guard. Verify with `sh scripts/dashxml-harness/run.sh`. |
 | patch | `patches/0001-…`, `patches/0003-…` | ffmpeg-android-maker build hook + configure flags. |
 
 `apply-firedown-patches.sh` is **idempotent** — each edit is gated on a marker
@@ -37,7 +38,8 @@ generic and host-agnostic.
 
 ## JNI reference discipline in `http.c` (issue #300 OOM)
 
-`http.c` is the one place in this fork that holds JNI references, and HLS/DASH
+`http.c` is where this fork's JNI references live at call rate (`fdxml.c`
+makes one call per DASH manifest, local refs only — see its section), and HLS/DASH
 opens a fresh `URLContext` — hence a fresh `FFmpegOkhttp` object and a fresh set
 of jfields class refs — **per segment, key and playlist**. At that call rate any
 per-open leak is unbounded, so three rules hold:
@@ -165,6 +167,11 @@ wall time; lower the constant if that feels long.
 
 ## dashdec.c drop `xmlCleanupParser()` (`patches/0006`)
 
+**Status since fdxml (next section):** dashdec.c no longer uses libxml2, so
+the race below cannot happen — `xmlCleanupParser()` is a no-op macro in
+`fdxml.h`. The patch still applies and is kept: harmless, and it is the
+protection if fdxml is ever reverted. Retire it once fdxml has shipped.
+
 **Root cause it fixes ("pthread_mutex_lock called on a destroyed mutex"):** a
 1.1.91 tombstone — `SIGABRT` on a capture-probe pool thread, `libavformat`
 under `avformat_open_input` ← `jni_extract_metadata`. Symbolized against the
@@ -211,6 +218,103 @@ and rebuilt it per manifest — churn on top of the race.
   survives in `dashdec.c`, and `apply-firedown-patches.sh` re-checks that
   after applying — a future FFmpeg that adds a second call fails the build
   loudly instead of shipping the race back.
+
+## DASH manifests: XML from Java (fdxml) — no libxml2
+
+**Why.** `dashdec.c` was libxml2's only consumer here, and it uses libxml2 as a
+small DOM: about twenty calls (first element child, next element sibling, an
+attribute by name, a node's text, a few writes to BaseURL nodes). For that the
+build linked the whole library — Schema, XPath, the HTML parser and catalogs
+came along — ~1.15 MB of stripped code per ABI (measured on a host build of the
+same 2.13.6 configuration; ~0.24 MB with every optional module configured out),
+a C XML parser in front of manifests from any website (the app's generic
+catcher picks up any `<MPD>` body), and process-global state whose teardown
+crashed concurrent parses (patch 0006). The device's own libxml2 is not an
+option: since Android 7 an app may only load the NDK's public libraries, and
+libxml2 is not one. The platform parser an app CAN reach is the Java one.
+
+**Shape.** `dashdec.c` keeps calling libxml2's names; `fdxml.h` maps them onto
+`fdxml.c`, whose tree comes from ONE JNI call per manifest:
+`ff_fdxml_read_memory()` → `FFmpegXml.parse(ByteBuffer)` in the app → the
+platform's `XmlPullParser` (KXmlParser) → one `byte[]` (wire format `FDX1`,
+documented in `FFmpegXml`'s javadoc — the two sides must match byte for byte)
+→ `ff_fdxml_doc_from_blob()`. The manifest goes over as a DIRECT ByteBuffer on
+`buf.str` (no copy, and none of JNI's modified-UTF-8 near the document); every
+JNI reference, the class included (`ff_jni_init_jfields(..., global = 0)`), is
+local and deleted before returning; no tree state is shared between threads.
+So `dashdec.c` changes in two lines, which is what keeps FFmpeg bumps cheap.
+Don't "improve" it into a JNI call per `xmlGetProp` (a SegmentTimeline is
+thousands of nodes, each call a local ref on a long-lived attached thread),
+and don't move MPD semantics into Java (that is a dashdec rewrite to rebase on
+every bump).
+
+**The semantics are libxml2 2.13's, as far as dashdec can observe them, and
+several are load-bearing** (each pinned by the harness below):
+- **Names:** a prefix declared in scope (and `xml:`) is stripped — `<mpd:MPD>`
+  is `MPD`, `xml:lang` is `lang` — but an UNDECLARED prefix stays in the name
+  (`<mspr:pro>` is `mspr:pro`). libxml2 only warns about undeclared prefixes;
+  KXmlParser's namespace mode rejects the whole document. The first version
+  left prefixes to the parser and lost real manifests (PlayReady `mspr:pro`,
+  SCTE-35, YouTube `yt:`), so `FFmpegXml` resolves prefixes itself with the
+  parser's namespace processing OFF.
+- **`xmlGetProp`** matches the local name whatever its namespace, first wins
+  (`xml:lang="de" lang="en"` reads `de`).
+- **`xmlNodeGetContent`** of an element is its descendant text + CDATA, and
+  `""` — never NULL — when there is none: `resolve_content_path` compares it
+  with `""` unguarded (the NULL mutant crashes 85 manifests under ASan).
+- **Text, CDATA and comment children stay distinct nodes:** `get_content_url`
+  reads a BaseURL only when its FIRST child is text. That reproduces an
+  upstream quirk (a root-relative BaseURL in CDATA, or after a comment,
+  resolves wrong with libxml2 too) — on purpose: the goal is identical output.
+- **`xmlEncodeSpecialChars` + `xmlNodeSetContent` are an identity pair**
+  (libxml2 escapes, then decodes entity references on set). Keep them in step.
+- Entity references merge into the surrounding text node; an undefined entity
+  refuses the document (libxml2: fatal). Nesting is capped at 256 on both
+  sides (libxml2's limit without `XML_PARSE_HUGE`). A literal tab in an
+  attribute becomes a space (XML attribute normalization; KXmlParser does CR/LF
+  only) — a `&#9;` reference does too, where libxml2 keeps a tab: accepted.
+- **The one deliberate difference: a DOCTYPE is refused** (the WebDAV PROPFIND
+  rule — no MPD carries one, and it is the door to entity expansion). Listed in
+  `scripts/dashxml-harness/expected-diffs.txt`; keep that list short.
+
+**Guard.** Step 3e fails the build (exit 10) if `dashdec.c`'s code (comments
+excluded) uses an `xml*` / `XML_*` / `LIBXML_*` name `fdxml.h` does not
+provide — an FFmpeg bump that adds a libxml2 call must fail there, not compile
+against a stray macro.
+
+**Build and release.**
+- Build **without `-xml2`** (`./ffmpeg-android-maker.sh -dav1d …`): nothing
+  needs libxml2 any more, and `dash_demuxer_deps="jni"` means a non-JNI (host)
+  FFmpeg build has no DASH demuxer at all.
+- A `.so` built from this needs the app's `FFmpegXml` (kept by name in
+  `proguard-rules.pro` — it is only ever called from native). Without it
+  `FindClass` fails, every DASH manifest is refused, and the log says
+  `fdxml: jfields init failed`. Ship the app side no later than the `.so`.
+
+**Verify with `sh scripts/dashxml-harness/run.sh`** — after any change to
+`fdxml.{c,h}`, to `FFmpegXml.java`, to Step 3e, and on every FFmpeg bump. It
+compiles `dashdec.c`'s REAL `parse_manifest()` twice — vanilla against libxml2,
+and as the REAL `apply-firedown-patches.sh` leaves it against fdxml fed by the
+REAL `FFmpegXml.java` in a JVM — and diffs everything it extracts over a corpus:
+`corpus/*.mpd` (hand-written, one behaviour each), `gen-corpus.py` (a 2.8 MB
+segment list, nesting at and past 256) and the DASH test manifests of
+ExoPlayer, Shaka Player and dash.js (sparse-cloned once; `DASHXML_EXTERNAL=0`
+to skip). Under ASan/UBSan; fdxml may leak nothing libxml2 doesn't (upstream
+`resolve_content_path` leaks a little in both); `fdxml.c` must compile
+warning-free with and without `CONFIG_JNI`; and four planted bugs (three in
+`fdxml.c`, the namespace one in `FFmpegXml.java`) must each be caught. At
+write time: 120 manifests, 119 identical plus the DOCTYPE, 753 checks. About a
+minute warm; the first run also builds FFmpeg and libxml2 for the host
+(cached under `~/.cache/firedown-harness/dashxml`). Lesson it already taught:
+LeakSanitizer exits with `_exit()` from an exit handler, so a dump that did
+not flush stdout compared "identical" to another empty one — every output
+must now end with `end`, and every hand-written case must parse in the
+reference build, so "identical" never means "both failed".
+
+**Known limit.** The harness runs upstream kxml2 2.3.0; Android's KXmlParser
+is libcore's fork of it. A parser-specific difference only shows on a device:
+download an RTVE video (the app's `rtveCdn` path) and a generic-catcher DASH
+page, and grep `FFmpegXml` / `fdxml` in logcat on a debug build.
 
 ## AV1 needs `-dav1d` — the native `av1` decoder is a hwaccel-only stub
 
@@ -291,6 +395,9 @@ the end-to-end checklist.
   `scripts/generate-xmlcleanup-patch.sh <ffmpeg-src>`.
 - Confirm `apply-firedown-patches.sh <ffmpeg-src>` applies cleanly and is
   idempotent (run twice).
+- Run `sh scripts/dashxml-harness/run.sh` (it reads the FFmpeg version from
+  `scripts/parse-arguments.sh`): Step 3e's guard catches a new libxml2 call in
+  `dashdec.c`, the harness a changed one.
 - Rebuild the `.so`s, then `scripts/publish-release.sh v<ffmpeg>-<n>` and bump
   `firedown.ffmpegRelease` in the app's `gradle.properties` (or, for a local
   test first, the app repo's `scripts/sync-ffmpeg.sh`).

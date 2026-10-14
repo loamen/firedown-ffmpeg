@@ -1,0 +1,1 @@
+<?xml version="1.0" encoding="UTF-8"?><mpd:MPD xmlns:mpd="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT10S"><mpd:Period duration="PT10S"><mpd:AdaptationSet mimeType="video/mp4"><mpd:Representation id="a" bandwidth="5"><mpd:BaseURL>v.mp4</mpd:BaseURL></mpd:Representation></mpd:AdaptationSet></mpd:Period></mpd:MPD>

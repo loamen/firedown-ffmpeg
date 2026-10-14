@@ -1,0 +1,1 @@
+<?xml version="1.0" encoding="ISO-8859-1"?><MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static"><ProgramInformation><Title>España été</Title></ProgramInformation><Period><AdaptationSet mimeType="video/mp4"><Representation id="l1" bandwidth="1"><BaseURL>ñ.mp4</BaseURL></Representation></AdaptationSet></Period></MPD>
